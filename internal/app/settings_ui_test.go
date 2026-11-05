@@ -1,6 +1,7 @@
 package app
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,11 @@ func TestGeneralSettingsFitsOriginalWindow(t *testing.T) {
 	a := newTestApp(t)
 	a.draftFromConfig()
 	tt := ui.NewTester(a.settingsView, 510, 528)
-	for _, label := range []string{"登录时启动", "自动检查更新", "检查更新", "搜索", "自动粘贴", "纯文本粘贴", "通知和声音 ↗"} {
+	labels := []string{"登录时启动", "自动检查更新", "检查更新", "搜索", "自动粘贴", "纯文本粘贴"}
+	if runtime.GOOS == "darwin" {
+		labels = append(labels, "通知和声音 ↗")
+	}
+	for _, label := range labels {
 		r, ok := tt.Find(label)
 		if !ok || r.Y < 0 || r.Y+r.H > 528 || r.X < 0 || r.X+r.W > 510 {
 			t.Fatalf("reference-size settings clip %q at %v, found=%v", label, r, ok)
@@ -115,7 +120,7 @@ func TestIgnoreEntriesEditAndValidate(t *testing.T) {
 	if err := tt.Click("com.one"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("com.edited")
 	tt.Key(0, ui.KeyEnter)
 	if a.cfg.Snapshot().IgnoredApps[0] != "com.edited" {
@@ -124,7 +129,7 @@ func TestIgnoreEntriesEditAndValidate(t *testing.T) {
 	if err := tt.Click("com.edited"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("com.two")
 	tt.Key(0, ui.KeyEnter)
 	if a.prefs.IgnoredApps != "com.edited\ncom.two" {
@@ -136,13 +141,13 @@ func TestIgnoreEntriesEditAndValidate(t *testing.T) {
 	if err := tt.Click("^alpha$"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("[")
 	tt.Key(0, ui.KeyEnter)
 	if a.prefs.IgnoreRegexp != "^alpha$" {
 		t.Fatal("invalid edited regexp was saved")
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("^beta$")
 	tt.Key(0, ui.KeyEnter)
 	if a.cfg.Snapshot().IgnoreRegexp[0] != "^beta$" {
@@ -162,7 +167,7 @@ func TestStorageSizeAppliesLimitAndPreservesPins(t *testing.T) {
 	if err := tt.Click("数量"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("2")
 	if len(a.items) != 3 || a.cfg.Snapshot().HistorySize != 2 {
 		t.Fatalf("size limit not applied: items=%d size=%d", len(a.items), a.cfg.Snapshot().HistorySize)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"github.com/binyouo/Maccy-MyGo/internal/config"
 	"github.com/binyouo/Maccy-MyGo/internal/model"
@@ -30,6 +31,13 @@ var supportedPins = []string{
 
 func (a *App) availablePinsLocked() []string {
 	assigned := map[string]bool{}
+	// On Windows/Linux the primary shortcut is Control, so these pin
+	// letters would be intercepted by the search/navigation bindings.
+	if ui.Cmd == ui.Ctrl {
+		for _, key := range []string{"h", "j", "k", "n", "p", "u"} {
+			assigned[key] = true
+		}
+	}
 	for _, it := range a.items {
 		if it.IsPinned() && it.Pin != "" {
 			assigned[it.Pin] = true

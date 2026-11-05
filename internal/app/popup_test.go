@@ -201,7 +201,7 @@ func TestToolbarEditSaveCancelAndDelete(t *testing.T) {
 	if err := tt.Click("编辑条目"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("renamed beta")
 	if err := tt.Click("完成"); err != nil {
 		t.Fatal(err)
@@ -483,6 +483,33 @@ func TestPopupPinKeyActivates(t *testing.T) {
 	tt.Key(ui.Cmd, key)
 	if a.lastCopiedID != target.ID {
 		t.Fatalf("⌘B should activate the pinned item, lastCopiedID=%q", a.lastCopiedID)
+	}
+}
+
+func TestEveryAvailablePinActivatesWithPrimaryModifier(t *testing.T) {
+	a := popupTestApp(t)
+	target := a.vitems[0]
+	choices := a.availablePinsLocked()
+	a.togglePin(target)
+	tt := ui.NewTester(a.popupViewPanel, 450, 500)
+	for _, pin := range choices {
+		a.mu.Lock()
+		if pin != target.Pin && !a.updatePinKeyLocked(target, pin) {
+			a.mu.Unlock()
+			t.Fatalf("available pin %q was rejected", pin)
+		}
+		a.rebuildLocked()
+		a.mu.Unlock()
+		a.lastCopiedID = ""
+		tt.Frame()
+		key, ok := keyFromName(pin)
+		if !ok {
+			t.Fatalf("available pin %q has no key", pin)
+		}
+		tt.Key(ui.Cmd, key)
+		if a.lastCopiedID != target.ID {
+			t.Fatalf("available pin %q was intercepted instead of activating its item", pin)
+		}
 	}
 }
 

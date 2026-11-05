@@ -60,7 +60,7 @@ func TestPopupHotkeyItemPrecedesCycle(t *testing.T) {
 	if !ok || a.popupHotkeyItem(key, ui.Alt) != 0 {
 		t.Fatalf("pinned shortcut %q did not win", ch)
 	}
-	if got := a.popupHotkeyItem(ui.Key1, ui.Ctrl); got != -1 {
+	if got := a.popupHotkeyItem(ui.Key1, ui.Ctrl|ui.Super); got != -1 {
 		t.Fatalf("unsupported modifiers matched=%d", got)
 	}
 }

@@ -38,7 +38,7 @@ func TestPopupTypingKeepsWindowHeight(t *testing.T) {
 		if err := tt.Click("搜索"); err != nil {
 			t.Fatal(err)
 		}
-		tt.Key(ui.Super, ui.KeyA)
+		tt.Key(ui.Cmd, ui.KeyA)
 		tt.Key(0, ui.KeyBackspace)
 		tt.Type(s)
 		if got := a.lastPopupH; got != height {

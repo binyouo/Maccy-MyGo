@@ -65,7 +65,7 @@ func TestAppearanceNumberInputBounds(t *testing.T) {
 	if err := tt.Click("图片高度"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Key(ui.Super, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("200")
 	tt.Key(0, ui.KeyUp)
 	if a.cfg.Snapshot().ImageMaxHeight != 200 {
