@@ -1,0 +1,14 @@
+build/
+dist/
+.mygo/
+*.app/
+*.dmg
+.DS_Store
+/reference-Maccy/
+/reference-MyGo/
+/tmp/
+/docs/*.png
+.env
+.env.*
+*.pem
+*.key

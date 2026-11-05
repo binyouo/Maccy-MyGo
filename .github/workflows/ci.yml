@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests and cross-platform builds
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - run: go test ./... -count=1 -timeout=90s
+      - run: go vet ./...
+      - name: Build supported desktop targets
+        shell: bash
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o "$RUNNER_TEMP/maccy-mygo-linux" .
+          GOOS=windows GOARCH=amd64 go build -o "$RUNNER_TEMP/maccy-mygo.exe" .
+          GOOS=darwin GOARCH=arm64 go build -o "$RUNNER_TEMP/maccy-mygo-darwin" .
+
+  macos:
+    name: macOS native regression tests
+    runs-on: macos-15
+    env:
+      CGO_ENABLED: "0"
+      MACCY_NATIVE_GEOMETRY_TEST: "1"
+      MACCY_NATIVE_HOTKEY_TEST: "1"
+      MACCY_NATIVE_CLIPBOARD_TEST: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./... -count=1 -timeout=90s
+      - run: go test -race ./internal/model -count=1 -timeout=45s
+        env:
+          CGO_ENABLED: "1"
