@@ -12,18 +12,18 @@
 | 空闲内存 | RSS 264MB / footprint 223MB | RSS 82MB / footprint 30MB | **Go 省 ~3-7×**（原版背着真实 1.8GB 库，但 SwiftData 常驻开销本身就高） |
 | 空闲 CPU | ~0% | ~0.1% | 持平，均可忽略 |
 | 剪贴板捕获延迟 | 中位 280ms | 中位 264ms | **持平**（同为 0.5s 轮询，延迟即轮询相位） |
-| 搜索·exact | 6.7ms @200 | 11.7ms @200 | 原版快 ~1.7×（NSString 比较高度优化） |
+| 搜索·exact | 6.7ms @200 | **0.4ms @200**（优化前 11.7ms） | **Go 快 ~17×**（优化后，见第 0 节） |
 | 搜索·regexp | 1.3-5.2ms @200 | ~0.1ms @200 | **Go 快 10-30×**（regexp2 编译匹配优于 ICU/NSRegularExpression） |
-| 搜索·fuzzy | 2.5-5ms @200 | 9.5ms @200 | 原版快 ~2-4×（fuse-swift 在 UTF-16 单元上跑 bitap） |
-| 搜索·大表 | n=10000 exact 280ms / fuzzy ~300ms | n=10000 exact 560ms / fuzzy ~500ms | 原版快 ~2×；两者在 200 条真实规模下都远低于感知阈值 |
+| 搜索·fuzzy | 2.5-5ms @200 | **~1.1ms @200**（优化前 9.5ms） | **Go 快 ~3×**（优化后） |
+| 搜索·大表 | n=10000 exact 280ms / fuzzy ~300ms | n=10000 exact ~25ms / fuzzy ~65ms | **Go 快 ~5-10×**（优化后；优化前为慢 ~2×） |
 | UI 搜索端到端 | 无法测（无自动化接口） | ~50ms/查询 | 参考量级，含 IPC |
 | 体积 | 二进制 3.8MB / bundle 10MB | 二进制 16.1MB / bundle 15MB | 原版更小（共享系统 Swift/AppKit 框架） |
 
 ### 值得注意的点
 
-1. **搜索算法各有胜负**：Go 的 exact/fuzzy 慢 ~1.7-4×（Unicode 大小写折叠与 grapheme 处理的代价），
-   但 regexp 快一个数量级。在真实 200 条规模下两边都是 ~10ms 级，无感知差异；
-   差异只在超大历史（>2000 条）才显著。
+1. **搜索算法**：初测 Go 的 exact/fuzzy 慢 ~1.7-4×（逐条做 uniseg grapheme 切分 + 全量
+   大小写折叠 + NFC 归一化），regexp 快一个数量级。第 0 节为优化后结果：
+   ASCII 快路径 + 预处理消除后 Go 全模式反超（第 0 节），regexp 优势保持不变。
 2. **⚠️ 命中数分歧是设计取舍不是 bug**：`regexp`/`mixed` 的 `regex-email` 在 n≥2000 时
    Go 命中更少——Go 对正则搜索设了 100ms 总预算（`internal/search`），昂贵模式扫到一半截断；
    原版 ICU 扫全表。这是响应性 vs 完整性的取舍，AUDIT.md 已记录。
@@ -32,11 +32,34 @@
 
 ---
 
-以下明细由 `tools/bench/report.py` 生成。
+以下明细由 `tools/bench/report.py` 生成（第 0 节除外，为优化后手工整理）。
 
-# Maccy 原版 (Swift) vs Go 重写版 性能压测报告
+## 0. 优化后复测（先看这里）
 
-## 1. 搜索算法微基准（同语料同查询）
+对 `internal/search` 做了行为等价的预处理优化后重跑同 corpus：
+
+| 模式 | n | 优化前 Go | 优化后 Go | Swift | 优化后 vs Swift |
+| --- | --- | --- | --- | --- | --- |
+| exact 中位 | 200 | ~11.8 ms | ~0.4 ms | ~6.7 ms | 快 ~17× |
+| exact 中位 | 10000 | ~580 ms | ~27 ms | ~285 ms | 快 ~10× |
+| fuzzy 中位 | 200 | ~9.5 ms | ~1.1 ms | ~3.5 ms | 快 ~3× |
+| fuzzy 中位 | 10000 | ~510 ms | ~65 ms | ~270 ms | 快 ~4× |
+| mixed 中位 | 200 | ~17 ms | ~1.5 ms | ~11 ms | 快 ~7× |
+| mixed 中位 | 10000 | ~870 ms | ~55 ms | ~600 ms | 快 ~10× |
+
+优化内容（`internal/search/{unicode,fuzzy,search}.go`，parity/差分测试全部通过）：
+
+- **ASCII 快路径**：纯 ASCII 标题/查询直接 `strings.ToLower + strings.Index`——
+  ASCII 的 case fold = lowercase、byte offset = rune offset、NFC 恒等，与全语义路径完全等价
+- **查询词折叠提出 per-item 循环**（原来每条 item 重折一次 pattern）
+- **逐簇开销消除**：整串 `norm.NFC.IsNormalString` 一次判定替代逐簇 `NFC.String`；
+  无大小写字符的簇跳过 `Lower.String`；boundaries `map[int]int` → `[]int`
+- **fuzzy bitap 双缓冲**：`matchMask`/`bits` 由 `fuzzyScratch` 复用，
+  消除 per-item × per-error-level 的 `make` 分配
+
+匹配结果两侧继续完全一致（⚠️ 除外：regexp 100ms 预算截断不变）。
+
+## 1. 搜索算法微基准（优化前基线，同语料同查询）
 
 语料：10,000 条合成标题（25% 英文句 / 15% 代码 / 10% URL / 25% 中文 / 10% 中英混排 / 10% 短词 / 5% 3-7KB 长文本）。
 数字为该查询对全表扫描一次的耗时中位数（ms）。⚠️ 标记表示两侧命中数不同——Go 版对正则搜索设有 100ms 总预算，大表 + 昂贵模式会提前截断（设计取舍，见 AUDIT.md）。

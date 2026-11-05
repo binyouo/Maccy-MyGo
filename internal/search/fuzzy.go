@@ -32,7 +32,34 @@ func fuzzyScore(length, errors, location int) float64 {
 	return float64(errors)/float64(length) + math.Abs(float64(location))/100
 }
 
-func (p fuzzyPattern) match(title string) ([]Range, float64, bool) {
+// fuzzyScratch carries the working buffers reused across match calls so a
+// full-table scan does not allocate per item (mask) or per error level
+// (bitap rows).
+type fuzzyScratch struct {
+	mask []bool
+	u1   []uint64
+	u2   []uint64
+}
+
+func (s *fuzzyScratch) maskBuf(n int) []bool {
+	if cap(s.mask) < n {
+		s.mask = make([]bool, n)
+		return s.mask
+	}
+	clear(s.mask[:n])
+	return s.mask[:n]
+}
+
+func (s *fuzzyScratch) growBits(n int) {
+	if cap(s.u1) < n {
+		s.u1 = make([]uint64, n)
+	}
+	if cap(s.u2) < n {
+		s.u2 = make([]uint64, n)
+	}
+}
+
+func (p fuzzyPattern) match(title string, sc *fuzzyScratch) ([]Range, float64, bool) {
 	chars := characters(title, true, 5001)
 	text := chars.text
 	n, m := len(text), len(p.text)
@@ -57,7 +84,7 @@ func (p fuzzyPattern) match(title string) ([]Range, float64, bool) {
 		return nil, 0, false
 	}
 	threshold := 0.7
-	matchMask := make([]bool, n)
+	matchMask := sc.maskBuf(n)
 	for start := 0; start+m <= n; {
 		index := -1
 		for i := start; i+m <= n; i++ {
@@ -84,7 +111,10 @@ func (p fuzzyPattern) match(title string) ([]Range, float64, bool) {
 	}
 	score := 1.0
 	binMax := m + n
+	sc.growBits(n + m + 2)
+	b1, b2 := sc.u1, sc.u2
 	var last []uint64
+	flip := false
 	for errors := 0; errors < m; errors++ {
 		lo, mid := 0, binMax
 		for lo < mid {
@@ -97,7 +127,10 @@ func (p fuzzyPattern) match(title string) ([]Range, float64, bool) {
 		}
 		binMax = mid
 		finish := min(mid, n) + m
-		bits := make([]uint64, finish+2)
+		bits := b1[:finish+2]
+		if flip {
+			bits = b2[:finish+2]
+		}
 		bits[finish+1] = bit(errors) - 1
 		for j := finish; j >= 1; j-- {
 			location := j - 1
@@ -126,6 +159,7 @@ func (p fuzzyPattern) match(title string) ([]Range, float64, bool) {
 			break
 		}
 		last = bits
+		flip = !flip
 	}
 	if score == 1 {
 		return nil, 0, false

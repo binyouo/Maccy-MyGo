@@ -78,8 +78,14 @@ func simple(items []*model.Item, query string, useRegexp bool) []Result {
 		}
 		return out
 	}
+	// Fold the query once; per-item work is the title scan below.
+	pattern, _ := foldedText(query)
+	if pattern == "" {
+		return nil
+	}
+	asciiPattern := isASCII(pattern)
 	for _, it := range items {
-		if r, ok := exactRange(it.Title, query); ok {
+		if r, ok := exactRange(it.Title, pattern, asciiPattern); ok {
 			out = append(out, Result{Item: it, Ranges: []Range{r}})
 		}
 	}
@@ -88,9 +94,10 @@ func simple(items []*model.Item, query string, useRegexp bool) []Result {
 
 func fuzzy(items []*model.Item, query string) []Result {
 	pattern := makeFuzzyPattern(query)
+	sc := &fuzzyScratch{}
 	var out []Result
 	for _, it := range items {
-		ranges, score, ok := pattern.match(it.Title)
+		ranges, score, ok := pattern.match(it.Title, sc)
 		if ok {
 			out = append(out, Result{Item: it, Score: score, Ranges: ranges})
 		}
