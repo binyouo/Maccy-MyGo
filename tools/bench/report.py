@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """report.py — merge /tmp/maccy-bench/out/* into a markdown report.
 
-Usage: python3 tools/bench/report.py [outdir] > RESULTS.md
+Usage: python3 tools/bench/report.py [outdir]
 """
 import json
 import re

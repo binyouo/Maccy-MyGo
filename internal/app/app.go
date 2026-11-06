@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,13 +48,10 @@ type App struct {
 	kbdNav              bool
 	lastHovered         int
 
-	images           map[string]*ui.Bitmap
-	imageBytes       map[string]int64
-	imageFailedAt    map[string]time.Time
+	imageCache       previewImageCache
+	textPreview      textPreviewCache
 	appIcons         map[string]*ui.Bitmap
 	appIconLoading   map[string]bool
-	imageLoading     map[string]bool
-	imageMu          sync.Mutex
 	appIconMu        sync.Mutex
 	lastPopupW       int
 	lastPopupH       int
@@ -120,12 +118,18 @@ type App struct {
 
 // New creates the app.
 func New(cfg *config.Config, store *model.Store) *App {
-	a := &App{cfg: cfg, store: store, images: map[string]*ui.Bitmap{}, appIcons: map[string]*ui.Bitmap{}, appIconLoading: map[string]bool{}, imageLoading: map[string]bool{}, footerIndex: -1, lastHovered: -1, kbdNav: true}
+	a := &App{cfg: cfg, store: store, appIcons: map[string]*ui.Bitmap{}, appIconLoading: map[string]bool{}, footerIndex: -1, lastHovered: -1, kbdNav: true}
 	a.items = store.Items
+	oldOrder := append([]string(nil), cfg.PinOrder...)
 	a.reconcilePinsLocked(cfg)
-	_ = cfg.Save()
+	if !slices.Equal(oldOrder, cfg.PinOrder) {
+		_ = cfg.Save()
+	}
+	oldCount := len(a.items)
 	a.trimLocked()
-	a.saveLocked()
+	if len(a.items) != oldCount {
+		a.saveLocked()
+	}
 	a.rebuildLocked()
 	return a
 }

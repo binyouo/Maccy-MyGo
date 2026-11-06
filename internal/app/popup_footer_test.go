@@ -39,7 +39,11 @@ func footerLayoutFixture(t *testing.T, icons bool, width int) (*App, *ui.Tester)
 		}
 		a.addItem(item)
 		if i%3 == 0 {
-			a.images[item.ID] = bitmap
+			if a.imageCache.entries == nil {
+				a.imageCache.entries = map[previewImageKey]*previewImageEntry{}
+			}
+			key := imageVariantKey(item, 340, 40)
+			a.imageCache.entries[key] = &previewImageEntry{bitmap: bitmap}
 		}
 	}
 	tt := ui.NewTester(func(c *ui.Context) {

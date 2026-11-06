@@ -19,16 +19,21 @@ func ChangeCount() (count int64, available bool) {
 		return 0, false
 	}
 	mygo.RunOnMain(func() {
-		class := objc.GetClass("NSPasteboard")
-		if class == 0 {
-			return
-		}
-		board := objc.ID(class).Send(generalPasteboardSelector)
-		if board == 0 {
-			return
-		}
-		count = objc.Send[int64](board, pasteboardChangeSelector)
-		available = count >= 0
+		count, available = changeCountOnMain()
 	})
 	return count, available
+}
+
+// The native polling timer already runs on AppKit's main thread.
+func changeCountOnMain() (int64, bool) {
+	class := objc.GetClass("NSPasteboard")
+	if class == 0 {
+		return 0, false
+	}
+	board := objc.ID(class).Send(generalPasteboardSelector)
+	if board == 0 {
+		return 0, false
+	}
+	count := objc.Send[int64](board, pasteboardChangeSelector)
+	return count, count >= 0
 }

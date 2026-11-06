@@ -119,7 +119,8 @@ type Config struct {
 	DeleteShortcut            string           `json:"deleteShortcut"`
 	PreviewShortcut           string           `json:"previewShortcut"`
 
-	path string
+	path                string
+	intervalSubscribers map[chan struct{}]struct{}
 }
 
 var mu sync.Mutex
@@ -206,6 +207,7 @@ func (c *Config) Snapshot() Config {
 	mu.Lock()
 	defer mu.Unlock()
 	cp := *c
+	cp.intervalSubscribers = nil
 	cp.IgnoreRegexp = append([]string(nil), c.IgnoreRegexp...)
 	cp.IgnoredApps = append([]string(nil), c.IgnoredApps...)
 	cp.IgnoredPasteboardTypes = append([]string(nil), c.IgnoredPasteboardTypes...)
@@ -216,17 +218,46 @@ func (c *Config) Snapshot() Config {
 // Update applies fn to a copy, then stores it.
 func (c *Config) Update(fn func(*Config)) error {
 	mu.Lock()
+	oldInterval := c.ClipboardCheckInterval
 	cp := *c
 	cp.IgnoreRegexp = append([]string(nil), c.IgnoreRegexp...)
 	cp.IgnoredApps = append([]string(nil), c.IgnoredApps...)
 	cp.IgnoredPasteboardTypes = append([]string(nil), c.IgnoredPasteboardTypes...)
 	cp.PinOrder = append([]string(nil), c.PinOrder...)
 	path := c.path
+	subscribers := c.intervalSubscribers
 	fn(&cp)
 	cp.path = path
+	cp.intervalSubscribers = subscribers
 	*c = cp
+	if oldInterval != c.ClipboardCheckInterval {
+		for ch := range c.intervalSubscribers {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+	}
 	mu.Unlock()
 	return c.Save()
+}
+
+// SubscribeIntervalChanges lets a native timer follow configuration without
+// a second polling timer. Events coalesce; readers use Interval for the latest
+// value. Cancel removes only this subscription and does not close the channel.
+func (c *Config) SubscribeIntervalChanges() (<-chan struct{}, func()) {
+	mu.Lock()
+	if c.intervalSubscribers == nil {
+		c.intervalSubscribers = make(map[chan struct{}]struct{})
+	}
+	ch := make(chan struct{}, 1)
+	c.intervalSubscribers[ch] = struct{}{}
+	mu.Unlock()
+	return ch, func() {
+		mu.Lock()
+		delete(c.intervalSubscribers, ch)
+		mu.Unlock()
+	}
 }
 
 // ReplacePinOrder stores a new pin order and saves.

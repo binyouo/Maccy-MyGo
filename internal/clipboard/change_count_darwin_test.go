@@ -16,6 +16,13 @@ import (
 // ordinary clipboard tests headless. The probe writes only a unique named
 // pasteboard; it never reads or replaces general clipboard content.
 func TestMain(m *testing.M) {
+	if os.Getenv("MACCY_NATIVE_POLLING_PROBE") == "1" {
+		if err := probeNativePollingTimer(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv("MACCY_NATIVE_SEQUENCE_PROBE") == "1" {
 		if err := probeNativeClipboardSequence(); err != nil {
 			fmt.Fprintln(os.Stderr, err)

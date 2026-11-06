@@ -244,14 +244,13 @@ func TestMenuBarTextUsesContentAndCompleteCharacters(t *testing.T) {
 func TestDeletedHistoryDoesNotRetainPreviewBitmaps(t *testing.T) {
 	a := popupTestApp(t)
 	it := a.items[0]
-	a.images[it.ID] = nil
-	a.imageLoading[it.ID] = true
-	a.imageBytes = map[string]int64{it.ID: 123}
+	key := imageVariantKey(it, 340, 40)
+	a.imageCache.entries = map[previewImageKey]*previewImageEntry{key: {loading: true, sourceBytes: 123}}
 	a.deleteItem(it)
-	if _, ok := a.images[it.ID]; ok {
+	if _, ok := a.imageCache.entries[key]; ok {
 		t.Fatal("deleted history retained a bitmap cache entry")
 	}
-	if a.imageLoading[it.ID] || a.imageBytes[it.ID] != 0 {
+	if a.imageCache.bytes != 0 || len(a.imageCache.queue) != 0 {
 		t.Fatal("deleted image retained in-flight preview metadata")
 	}
 }

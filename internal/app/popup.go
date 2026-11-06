@@ -159,12 +159,12 @@ func (a *App) preview(c *ui.Context, t *ui.Theme, s popupSnapshot) {
 		}
 		ui.Column(c).Key(it.ID).Grow(1).FillWidth().Clip().Children(func() {
 			if clipboard.HasImage(it) {
-				if bmp := a.bitmapFor(it); bmp != nil {
+				if bmp := a.bitmapFor(it, width, max(400, a.lastPopupH)); bmp != nil {
 					ui.Image(c, bmp).Fit(ui.Contain).Radius(5).Grow(1)
 				}
 			} else {
 				ui.Scroll(c).Grow(1).Children(func() {
-					text, _ := sizedPreviewText(a.itemText(it))
+					text := a.previewText(it)
 					ui.Text(c, text).FontSize(12).Wrap()
 				})
 			}
@@ -190,11 +190,11 @@ func (a *App) preview(c *ui.Context, t *ui.Theme, s popupSnapshot) {
 				})
 			}
 			if clipboard.HasImage(it) {
-				if bmp := a.bitmapFor(it); bmp != nil {
-					w, h := bmp.Size()
-					meta("尺寸", fmt.Sprintf("%d×%d", w, h))
+				size, bytes := a.imageMetadata(it)
+				if size.X > 0 {
+					meta("尺寸", fmt.Sprintf("%d×%d", size.X, size.Y))
 				}
-				meta("大小", humanBytes(a.imageByteSize(it)))
+				meta("大小", humanBytes(bytes))
 			}
 			meta("首次复制", it.FirstCopiedAt.Format("2006-01-02 15:04"))
 			meta("最近复制", it.LastCopiedAt.Format("2006-01-02 15:04"))
@@ -269,38 +269,6 @@ func contentSize(it *model.Item) int64 {
 		n += int64(c.Size)
 	}
 	return n
-}
-
-func (a *App) imageByteSize(it *model.Item) int64 {
-	a.imageMu.Lock()
-	defer a.imageMu.Unlock()
-	if n, ok := a.imageBytes[it.ID]; ok {
-		return n
-	}
-	return contentSize(it)
-}
-
-// History owns bitmap lifetimes, including duplicate replacements and
-// capacity eviction; a removed item's thumbnail must not grow the cache.
-func (a *App) pruneImageCacheLocked() {
-	live := make(map[string]bool, len(a.items))
-	for _, it := range a.items {
-		live[it.ID] = true
-	}
-	a.imageMu.Lock()
-	defer a.imageMu.Unlock()
-	for id := range a.images {
-		if !live[id] {
-			delete(a.images, id)
-			delete(a.imageBytes, id)
-			delete(a.imageFailedAt, id)
-		}
-	}
-	for id := range a.imageLoading {
-		if !live[id] {
-			delete(a.imageLoading, id)
-		}
-	}
 }
 
 func (a *App) itemText(it *model.Item) string {
@@ -566,7 +534,7 @@ func (a *App) row(c *ui.Context, t *ui.Theme, s popupSnapshot, i int, chosen *fu
 		ranges := s.ranges[it.ID]
 		switch {
 		case hasImage:
-			if bmp := a.bitmapFor(it); bmp != nil {
+			if bmp := a.bitmapFor(it, 340, s.cfg.ImageMaxHeight); bmp != nil {
 				bw, bh := bmp.Size()
 				iw, ih := thumbSize(bw, bh, s.cfg.ImageMaxHeight)
 				ui.Image(c, bmp).Size(iw, ih).Radius(4).Margin(0, 5, 0, 0).PassThrough()
@@ -748,74 +716,6 @@ func thumbSize(bw, bh, maxH int) (w, h float32) {
 		w, h = float32(bw)*r, float32(bh)*r
 	}
 	return w, h
-}
-
-func (a *App) bitmapFor(it *model.Item) *ui.Bitmap {
-	a.imageMu.Lock()
-	if b, ok := a.images[it.ID]; ok {
-		if b != nil || time.Since(a.imageFailedAt[it.ID]) < time.Second {
-			a.imageMu.Unlock()
-			return b
-		}
-		// Remote Clipboard may publish a JPEG URL before the file arrives.
-		// A later repaint/reopen can retry without an unbounded refresh loop.
-		delete(a.images, it.ID)
-	}
-	if a.imageLoading[it.ID] {
-		a.imageMu.Unlock()
-		return nil
-	}
-	if !clipboard.HasImage(it) {
-		a.imageMu.Unlock()
-		return nil
-	}
-	a.imageLoading[it.ID] = true
-	id := it.ID
-	snapshot := *it
-	snapshot.Contents = append([]model.Content(nil), it.Contents...)
-	snapshot.Files = append([]string(nil), it.Files...)
-	a.imageMu.Unlock()
-	go func() {
-		var bmp *ui.Bitmap
-		var size int64
-		if data, err := clipboard.ImageData(a.store, &snapshot); err == nil {
-			size = int64(len(data))
-			bmp, _ = ui.DecodeBitmap(data)
-		}
-		a.post(func() {
-			a.mu.Lock()
-			live := false
-			for _, current := range a.items {
-				if current.ID == id {
-					live = true
-					break
-				}
-			}
-			a.mu.Unlock()
-			a.imageMu.Lock()
-			delete(a.imageLoading, id)
-			if !live {
-				a.imageMu.Unlock()
-				return
-			}
-			a.images[id] = bmp
-			if a.imageFailedAt == nil {
-				a.imageFailedAt = map[string]time.Time{}
-			}
-			if bmp == nil {
-				a.imageFailedAt[id] = time.Now()
-			} else {
-				delete(a.imageFailedAt, id)
-			}
-			if a.imageBytes == nil {
-				a.imageBytes = map[string]int64{}
-			}
-			a.imageBytes[id] = size
-			a.imageMu.Unlock()
-			a.refresh()
-		})
-	}()
-	return nil
 }
 
 // handleKey intercepts keys in the search field for navigation and actions.

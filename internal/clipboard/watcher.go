@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -33,6 +34,16 @@ type Watcher struct {
 	stopCh     chan struct{}
 	started    bool
 	wake       chan struct{}
+	native     *nativePolling
+}
+
+// accepted points to native-owned aligned atomic storage. Access is protected
+// by w.mu, so Stop clears it before the main thread releases the native handle.
+type nativePolling struct {
+	accepted        *atomic.Int64
+	stop            func()
+	syncInterval    func()
+	intervalChanges <-chan struct{}
 }
 
 // New creates a watcher.
@@ -66,12 +77,31 @@ func (w *Watcher) Start() {
 			}
 		}
 	}
-	go w.loop(stop)
+	native := w.startNativePolling(stop)
+	w.mu.Lock()
+	current := w.started && w.stopCh == stop
+	if current {
+		w.native = native
+		if native != nil {
+			native.accepted.Store(w.lastChange)
+		}
+	}
+	w.mu.Unlock()
+	if !current {
+		if native != nil {
+			native.stop()
+		}
+		return
+	}
+	go w.loop(stop, native)
 }
 
 func (w *Watcher) setSequence(count int64) {
 	w.mu.Lock()
 	w.lastChange, w.hasChange = count, true
+	if w.native != nil {
+		w.native.accepted.Store(count)
+	}
 	w.mu.Unlock()
 }
 
@@ -92,18 +122,29 @@ func (w *Watcher) acceptCopy(fp string, count int64, sequenced bool) bool {
 		return false
 	}
 	w.last, w.lastChange, w.hasChange = fp, count, sequenced
+	if sequenced && w.native != nil {
+		w.native.accepted.Store(count)
+	}
 	return true
 }
 
 // Stop ends polling.
 func (w *Watcher) Stop() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if !w.started {
+		w.mu.Unlock()
 		return
 	}
 	close(w.stopCh)
 	w.started = false
+	native := w.native
+	w.native = nil
+	w.mu.Unlock()
+	// Invalidation runs on the timer's main run loop. Never hold w.mu
+	// while waiting for the main thread, whose callback also uses it.
+	if native != nil {
+		native.stop()
+	}
 }
 
 // Wake forces a poll soon (used after the app itself writes the clipboard).
@@ -126,25 +167,43 @@ func (w *Watcher) setLast(s string) {
 	w.mu.Unlock()
 }
 
-func (w *Watcher) loop(stop <-chan struct{}) {
+func (w *Watcher) pollingInterval() float64 {
+	return max(.05, w.cfg.Interval())
+}
+
+func (w *Watcher) loop(stop <-chan struct{}, native *nativePolling) {
 	for {
-		interval := w.cfg.Interval()
-		if interval < 0.05 {
-			interval = 0.05
+		var timer *time.Timer
+		var tick <-chan time.Time
+		var intervalChanges <-chan struct{}
+		if native == nil {
+			timer = time.NewTimer(time.Duration(w.pollingInterval() * float64(time.Second)))
+			tick = timer.C
+		} else {
+			intervalChanges = native.intervalChanges
 		}
-		timer := time.NewTimer(time.Duration(interval * float64(time.Second)))
 		select {
 		case <-stop:
-			timer.Stop()
+			if timer != nil {
+				timer.Stop()
+			}
 			return
 		case <-w.wake:
-			timer.Stop()
-		case <-timer.C:
+			if timer != nil {
+				timer.Stop()
+			}
+		case <-intervalChanges:
+			native.syncInterval()
+			continue
+		case <-tick:
 		}
 		select {
 		case <-stop:
 			return
 		default:
+		}
+		if native != nil {
+			native.syncInterval()
 		}
 		w.poll()
 	}
