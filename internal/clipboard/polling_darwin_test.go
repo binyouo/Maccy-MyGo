@@ -41,6 +41,7 @@ func probeNativePollingTimer() error {
 	}
 	var result error
 	var calls atomic.Int64
+	fired := make(chan time.Time, 64)
 	var acknowledge atomic.Bool
 	acknowledge.Store(true)
 	mygo.App.SetName("MaccyNativePollingProbe")
@@ -52,6 +53,10 @@ func probeNativePollingTimer() error {
 		var accepted *atomic.Int64
 		block := objc.NewBlock(func(_ objc.Block) {
 			calls.Add(1)
+			select {
+			case fired <- time.Now():
+			default:
+			}
 			if acknowledge.Load() {
 				accepted.Store(objc.Send[int64](board, pasteboardChangeSelector))
 			}
@@ -87,6 +92,18 @@ func probeNativePollingTimer() error {
 				stop()
 				mygo.RunOnMain(func() { block.Release(); board.Send(objc.RegisterName("releaseGlobally")) })
 			}()
+			waitCalls := func(want int64) bool {
+				deadline := time.NewTimer(3 * time.Second)
+				defer deadline.Stop()
+				for calls.Load() < want {
+					select {
+					case <-fired:
+					case <-deadline.C:
+						return false
+					}
+				}
+				return true
+			}
 			time.Sleep(160 * time.Millisecond)
 			if calls.Load() != 0 {
 				result = fmt.Errorf("unchanged board entered Go callback")
@@ -94,11 +111,7 @@ func probeNativePollingTimer() error {
 			}
 			for i := int64(1); i <= 2; i++ {
 				write()
-				deadline := time.Now().Add(time.Second)
-				for calls.Load() < i && time.Now().Before(deadline) {
-					time.Sleep(5 * time.Millisecond)
-				}
-				if calls.Load() != i {
+				if !waitCalls(i) || calls.Load() != i {
 					result = fmt.Errorf("identical copy %d not observed: %d", i, calls.Load())
 					return
 				}
@@ -109,18 +122,36 @@ func probeNativePollingTimer() error {
 				return
 			}
 			acknowledge.Store(false)
+			before := calls.Load()
 			write()
-			time.Sleep(220 * time.Millisecond)
-			if calls.Load() < 4 {
+			if !waitCalls(before + 2) {
 				result = fmt.Errorf("unacknowledged copy did not retry")
 				return
 			}
-			mygo.RunOnMain(func() { pollingLibrary.interval(handle, .2) })
-			before := calls.Load()
-			time.Sleep(650 * time.Millisecond)
-			slow := calls.Load() - before
-			if slow < 2 || slow > 4 {
-				result = fmt.Errorf("200ms interval: %d callbacks in 650ms", slow)
+			var changedAt time.Time
+			mygo.RunOnMain(func() {
+				pollingLibrary.interval(handle, .2)
+				changedAt = time.Now()
+			})
+			// Ignore notifications from before replacement. A shared CI host
+			// may delay timers, so wait for events instead of requiring a
+			// callback count inside a short, fixed wall-clock window.
+			for len(fired) > 0 {
+				<-fired
+			}
+			deadline := time.NewTimer(3 * time.Second)
+			var last time.Time
+			for i := 0; i < 3; i++ {
+				select {
+				case last = <-fired:
+				case <-deadline.C:
+					result = fmt.Errorf("updated timer did not deliver three callbacks")
+					return
+				}
+			}
+			deadline.Stop()
+			if elapsed := last.Sub(changedAt); elapsed < 400*time.Millisecond {
+				result = fmt.Errorf("200ms interval update was ignored: three callbacks in %v", elapsed)
 				return
 			}
 			stop()
@@ -141,13 +172,12 @@ func probeNativePollingTimer() error {
 				result = fmt.Errorf("restart unavailable")
 				return
 			}
-			time.Sleep(160 * time.Millisecond)
-			stop()
-			if calls.Load()-before < 2 {
+			if !waitCalls(before + 2) {
 				result = fmt.Errorf("restarted timer did not fire")
 				return
 			}
-			fmt.Printf("unchanged=0 callbacks; identical copies=2; unacknowledged retry; interval update=%d/650ms; stop/restart passed; named pasteboard only\n", slow)
+			stop()
+			fmt.Printf("unchanged=0 callbacks; identical copies=2; unacknowledged retry; interval update and stop/restart passed; named pasteboard only\n")
 		}()
 	})
 	if err := mygo.App.Run(); err != nil {

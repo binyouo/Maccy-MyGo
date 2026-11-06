@@ -4,6 +4,8 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 
@@ -19,13 +21,29 @@ import (
 //go:embed resources/icon.png
 var appIconPNG []byte
 
+//go:embed mygo.json
+var appManifest []byte
+
 func main() {
+	var metadata struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(appManifest, &metadata); err != nil {
+		log.Fatal(err)
+	}
+	if metadata.Version == "" {
+		log.Fatal("missing version in mygo.json")
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(metadata.Version)
+		return
+	}
 	name := "Maccy MyGo"
 	if n := os.Getenv("MACCY_NAME"); n != "" {
 		name = n
 	}
 	mygo.App.SetName(name)
-	mygo.App.SetVersion("1.0.0")
+	mygo.App.SetVersion(metadata.Version)
 
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {

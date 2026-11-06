@@ -33,6 +33,15 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -o "$RUNNER_TEMP/maccy-mygo-linux" .
           GOOS=windows GOARCH=amd64 go build -o "$RUNNER_TEMP/maccy-mygo.exe" .
           GOOS=darwin GOARCH=arm64 go build -o "$RUNNER_TEMP/maccy-mygo-darwin" .
+      - name: Verify application version matches release metadata
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          expected = json.loads(pathlib.Path('mygo.json').read_text())['version']
+          actual = subprocess.check_output([os.path.join(os.environ['RUNNER_TEMP'], 'maccy-mygo-linux'), '--version'], text=True).strip()
+          assert actual == expected, (actual, expected)
+          PY
 
   macos:
     name: macOS native regression tests
