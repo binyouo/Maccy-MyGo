@@ -2,7 +2,7 @@
   "name": "Maccy MyGo",
   "slug": "maccy-mygo",
   "identifier": "io.github.binyouo.maccy-mygo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "copyright": "© 2026 biny; Maccy © 2025 Alex Rodionov",
   "main": ".",
   "out": "build"
