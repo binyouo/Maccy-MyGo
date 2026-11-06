@@ -1,23 +1,23 @@
 # Maccy 原版 (Swift) vs Go 重写版 性能压测报告
 
-> 2026-11-05 · macOS arm64 · 原版 = `/Applications/Maccy.app` 2.7.1（真实 200 条 / 1.8GB 历史库）·
-> 现版 = 本仓库 `CGO_ENABLED=0 -trimpath -ldflags "-s -w"` 构建 · 原始数据见 `/tmp/maccy-bench/out/`，
+> 2026-11-06 · macOS arm64 · 原版 = `/Applications/Maccy.app` 2.7.1（真实 200 条 / 1.8GB 历史库）·
+> 现版 = 本仓库 v1.1.0 `CGO_ENABLED=0 -trimpath -ldflags "-s -w"` 构建 · 原始数据见 `/tmp/maccy-bench/out/`，
 > 复测方法见 [README.md](README.md)
 
 ## 结论摘要
 
 | 维度 | 原版 (Swift) | Go 版 | 结论 |
 | --- | --- | --- | --- |
-| 启动至空闲 | ~1011 ms | ~506 ms | **Go 快 ~2×**（socket 就绪 95ms vs 原版库打开 282ms） |
-| 空闲内存 | RSS 264MB / footprint 223MB | RSS 82MB / footprint 30MB | **Go 省 ~3-7×**（原版背着真实 1.8GB 库，但 SwiftData 常驻开销本身就高） |
+| 启动至空闲 | ~846 ms | ~481 ms | **Go 快 ~1.8×**（socket 就绪 90ms vs 原版库打开 368ms） |
+| 空闲内存 | RSS 376MB / footprint 123MB | RSS 83MB / footprint 31MB | **Go 省 ~4×**（原版背着真实 1.8GB 库，但 SwiftData 常驻开销本身就高） |
 | 空闲 CPU | ~0% | ~0.1% | 持平，均可忽略 |
-| 剪贴板捕获延迟 | 中位 280ms | 中位 264ms | **持平**（同为 0.5s 轮询，延迟即轮询相位） |
-| 搜索·exact | 6.7ms @200 | **0.4ms @200**（优化前 11.7ms） | **Go 快 ~17×**（优化后，见第 0 节） |
+| 剪贴板捕获延迟 | 中位 250ms | 中位 302ms | **持平**（同为 0.5s 轮询，延迟即轮询相位，中位数 ≈ 理论值 250ms） |
+| 搜索·exact | 6.7ms @200 | **0.4ms @200**（优化前 11.7ms） | **Go 快 ~16×**（优化后，见第 0 节） |
 | 搜索·regexp | 1.3-5.2ms @200 | ~0.1ms @200 | **Go 快 10-30×**（regexp2 编译匹配优于 ICU/NSRegularExpression） |
-| 搜索·fuzzy | 2.5-5ms @200 | **~1.1ms @200**（优化前 9.5ms） | **Go 快 ~3×**（优化后） |
-| 搜索·大表 | n=10000 exact 280ms / fuzzy ~300ms | n=10000 exact ~25ms / fuzzy ~65ms | **Go 快 ~5-10×**（优化后；优化前为慢 ~2×） |
-| UI 搜索端到端 | 无法测（无自动化接口） | ~50ms/查询 | 参考量级，含 IPC |
-| 体积 | 二进制 3.8MB / bundle 10MB | 二进制 16.1MB / bundle 15MB | 原版更小（共享系统 Swift/AppKit 框架） |
+| 搜索·fuzzy | 2.5-5ms @200 | **~1.5ms @200**（优化前 9.5ms） | **Go 快 ~3×**（优化后） |
+| 搜索·大表 | n=10000 exact ~210ms / fuzzy ~190ms | n=10000 exact ~23ms / fuzzy ~64ms | **Go 快 ~3-9×**（优化后；优化前为慢 ~2×） |
+| UI 搜索端到端 | 无法测（无自动化接口） | ~35-55ms/查询 | 参考量级，含 IPC |
+| 体积 | 二进制 3.8MB / bundle 10MB | 二进制 16.1MB / bundle 15MB | 原版更小（共享系统 Swift/AppKit 框架，见文末体积分析） |
 
 ### 值得注意的点
 
@@ -27,7 +27,7 @@
 2. **⚠️ 命中数分歧是设计取舍不是 bug**：`regexp`/`mixed` 的 `regex-email` 在 n≥2000 时
    Go 命中更少——Go 对正则搜索设了 100ms 总预算（`internal/search`），昂贵模式扫到一半截断；
    原版 ICU 扫全表。这是响应性 vs 完整性的取舍，AUDIT.md 已记录。
-3. **启动与内存优势明显**：Go 版常驻 footprint ~30MB，约为原版 1/7；启动到可用 ~0.5s。
+3. **启动与内存优势明显**：Go 版常驻 footprint ~31MB，约为原版 1/4；启动到可用 ~0.5s。
 4. **二进制更大**的代价换到的是单文件无依赖分发 + 纯 Go 构建链。
 
 ---
@@ -40,12 +40,12 @@
 
 | 模式 | n | 优化前 Go | 优化后 Go | Swift | 优化后 vs Swift |
 | --- | --- | --- | --- | --- | --- |
-| exact 中位 | 200 | ~11.8 ms | ~0.4 ms | ~6.7 ms | 快 ~17× |
-| exact 中位 | 10000 | ~580 ms | ~27 ms | ~285 ms | 快 ~10× |
-| fuzzy 中位 | 200 | ~9.5 ms | ~1.1 ms | ~3.5 ms | 快 ~3× |
-| fuzzy 中位 | 10000 | ~510 ms | ~65 ms | ~270 ms | 快 ~4× |
-| mixed 中位 | 200 | ~17 ms | ~1.5 ms | ~11 ms | 快 ~7× |
-| mixed 中位 | 10000 | ~870 ms | ~55 ms | ~600 ms | 快 ~10× |
+| exact 中位 | 200 | ~11.8 ms | ~0.4 ms | ~6.7 ms | 快 ~16× |
+| exact 中位 | 10000 | ~580 ms | ~23 ms | ~209 ms | 快 ~9× |
+| fuzzy 中位 | 200 | ~9.5 ms | ~1.5 ms | ~4.4 ms | 快 ~3× |
+| fuzzy 中位 | 10000 | ~510 ms | ~64 ms | ~193 ms | 快 ~3× |
+| mixed 中位 | 200 | ~17 ms | ~1.4 ms | ~10.9 ms | 快 ~8× |
+| mixed 中位 | 10000 | ~870 ms | ~25 ms | ~204 ms | 快 ~8× |
 
 优化内容（`internal/search/{unicode,fuzzy,search}.go`，parity/差分测试全部通过）：
 
@@ -277,35 +277,35 @@
 
 | 指标 | 样本 | 中位数 |
 | --- | --- | --- |
-| 存储就绪 | 1807 255 250 356 282 | 282 ms |
-| CPU 安静 | 2855 1011 1082 925 963 | 1011 ms |
-| RSS | 269664 218336 340272 258336 299232 | 269664 KB |
-| phys_footprint | 265216 266240 169984 211968 228352 | 228352 KB |
+| 存储就绪 | 716 368 236 370 350 | 368 ms |
+| CPU 安静 | 1339 855 806 846 830 | 846 ms |
+| RSS | 388048 379040 220624 376288 365296 | 376288 KB |
+| phys_footprint | 122880 115712 259072 114688 142336 | 122880 KB |
 | 空闲 CPU% | 0.0 0.0 0.0 0.0 0.0 | 0 % |
 
 **Go 版（合成 200 条历史）**
 
 | 指标 | 样本 | 中位数 |
 | --- | --- | --- |
-| socket 就绪 | 94 99 97 95 93 | 95 ms |
-| CPU 安静 | 576 506 508 500 455 | 506 ms |
-| RSS | 83936 85392 83808 83504 83328 | 83808 KB |
-| phys_footprint | 30720 32768 30720 30720 30720 | 30720 KB |
-| 空闲 CPU% | 0.25 0.12 0.12 0.13 0.12 | 0 % |
+| socket 就绪 | 90 92 97 90 88 | 90 ms |
+| CPU 安静 | 647 477 496 476 481 | 481 ms |
+| RSS | 83104 83392 83392 82896 82928 | 83104 KB |
+| phys_footprint | 30720 30720 30720 30720 30720 | 30720 KB |
+| 空闲 CPU% | 0.12 0.25 0.13 0.12 0.12 | 0 % |
 
 **剪贴板捕获延迟（ms，写入 → 历史可见）**
 
-- upstream: median=280  min=86.0  max=539.0  n=25
-- go: median=264  min=91.0  max=580.0  n=25
+- upstream: median=250  min=86.0  max=522.0  n=20
+- go: median=302  min=88.0  max=535.0  n=20
 
 注：两侧默认轮询间隔均为 0.5s，故延迟呈 0-500ms 均匀分布，中位数 ≈ 250ms 为理论值。
 
 **Go 版 UI 搜索延迟**
 
 ```
-query=needle-alpha-42 ui_settle_ms=53
-query=needle ui_settle_ms=48
-query=剪贴板历史 ui_settle_ms=51
+query=needle-alpha-42 ui_settle_ms=53 38
+query=needle ui_settle_ms=48 36
+query=剪贴板历史 ui_settle_ms=51 34
 ```
 含 automation IPC 与渲染轮询开销，仅作参考量级。
 
@@ -314,7 +314,13 @@ query=剪贴板历史 ui_settle_ms=51
 ```
 upstream binary: 3794160 bytes
 upstream bundle:  10M
-go binary:       16121762 bytes
+go binary:       16138290 bytes
 go bundle:        15M
 ```
+
+**体积分析**（未 strip 二进制按符号统计，见 `go tool nm -size`）：16.1MB 中真正的应用代码仅 ~0.3MB；
+~12MB 是 Go 固定"入场费"（runtime+GC ~5.8MB、pclntab/类型元数据 ~6.5MB），crypto/tls+net/http
+（更新检查 HTTPS）~0.8MB，unicode 折叠/grapheme 表 ~0.6MB，mygo 框架 ~1.7MB，其余依赖 ~0.3MB。
+原版小是因为 AppKit/Foundation/SwiftUI 在系统共享缓存里，二进制只含自身代码——这是静态链接税，
+换来单文件无依赖分发。注：`crypto/internal/fips140/drbg.memory` 的 32MB 是 BSS 运行时缓冲，不占文件。
 
